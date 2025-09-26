@@ -27,6 +27,9 @@ from cryptography.fernet import Fernet
 import uuid
 from dotenv import load_dotenv
 
+from database import Base, engine, get_db 
+from auth import router as auth_router, get_current_user, User 
+
 load_dotenv()
 
 # -----------------------
@@ -215,6 +218,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+
 def get_db():
     db = SessionLocal()
     try:
@@ -255,7 +260,7 @@ def health():
 
 # Holders
 @app.post("/holders", response_model=HolderOut)
-def create_holder(body: HolderIn, db: Session = Depends(get_db)):
+def create_holder(body: HolderIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     existing = db.query(Holder).filter_by(subject=body.subject).first()
     if existing:
         return HolderOut(
@@ -270,7 +275,7 @@ def create_holder(body: HolderIn, db: Session = Depends(get_db)):
 
 # Issuers & keys
 @app.post("/issuers")
-def add_issuer(body: IssuerIn, db: Session = Depends(get_db)):
+def add_issuer(body: IssuerIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ex = db.query(Issuer).filter_by(issuer_id=body.issuer_id).first()
     if ex:
         return {"id": ex.id, "issuer_id": ex.issuer_id, "name": ex.name}
@@ -279,7 +284,7 @@ def add_issuer(body: IssuerIn, db: Session = Depends(get_db)):
     return {"id": iss.id, "issuer_id": iss.issuer_id, "name": iss.name}
 
 @app.post("/issuers/keys")
-def add_issuer_key(body: IssuerKeyIn, db: Session = Depends(get_db)):
+def add_issuer_key(body: IssuerKeyIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     iss = db.query(Issuer).filter_by(issuer_id=body.issuer_id).first()
     if not iss:
         raise HTTPException(404, detail="Issuer not found")
@@ -308,7 +313,7 @@ def trust_bundle(db: Session = Depends(get_db)):
 
 # Credentials
 @app.post("/credentials", response_model=CredentialOut)
-def store_credential(body: CredentialIn, db: Session = Depends(get_db)):
+def store_credential(body: CredentialIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not body.jws:
         raise HTTPException(400, detail="Provide 'jws' for JWT format")
 
@@ -412,7 +417,7 @@ def get_credential(jti: str, db: Session = Depends(get_db)):
     )
 
 @app.post("/credentials/{jti}/revoke")
-def revoke_credential(jti: str, body: RevokeIn, db: Session = Depends(get_db)):
+def revoke_credential(jti: str, body: RevokeIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     cred = db.query(Credential).filter_by(jti=jti).first()
     if not cred:
         raise HTTPException(404, detail="Credential not found")
@@ -441,14 +446,14 @@ def revocations(db: Session = Depends(get_db)):
     return RevocationListOut(version=version, issuedAt=now_utc(), revokedJti=out)
 
 @app.get("/scans", response_model=List[ScanOut])
-def get_scans(db: Session = Depends(get_db)):
+def get_scans(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     stmt = select(Scan).order_by(Scan.scanned_at.desc())
     scans = db.execute(stmt).scalars().all()
     return [ScanOut(id=s.id, jti=s.jti, verified=s.verified, scanned_at=s.scanned_at) for s in scans]
 
 # Minimal search/list helpers
 @app.get("/holders/{subject}/credentials", response_model=List[CredentialOut])
-def list_holder_creds(subject: str, db: Session = Depends(get_db)):
+def list_holder_creds(subject: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     creds = db.query(Credential).filter_by(holder_subject=subject).order_by(Credential.created_at.desc()).all()
     return [
         CredentialOut(

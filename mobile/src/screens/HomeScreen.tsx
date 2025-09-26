@@ -9,8 +9,22 @@ import {
   Platform,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { decode as atob } from "base-64";
 
-type Props = NativeStackScreenProps<any>;
+type Props = NativeStackScreenProps<any> & { onLogout: () => void };
+
+// Helper to decode JWT and extract user_type
+function getUserTypeFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[1];
+    const decoded = JSON.parse(atob(payload));
+    return decoded.user_type || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 const colors = {
   bg: "#0b0d12",
@@ -19,11 +33,28 @@ const colors = {
   border: "#232a35",
   text: "#F2F4F7",
   muted: "#9AA3AD",
-  accent: "#0A84FF",     // iOS blue
-  accentAlt: "#30D158",  // iOS green for subtle highlights
+  accent: "#0A84FF",
+  accentAlt: "#30D158",
+  error: "#FF3B30",
 };
 
-export default function HomeScreen({ navigation }: Props) {
+const ACCESS_TOKEN_KEY = "vc_access_token";
+
+export default function HomeScreen({ navigation, onLogout }: Props) {
+  const [userType, setUserType] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const fetchUserType = async () => {
+      const token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+      setUserType(getUserTypeFromToken(token));
+    };
+    fetchUserType();
+  }, []);
+
+  const handleLogout = async () => {
+    await onLogout();
+  };
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       {/* soft background accents */}
@@ -89,23 +120,42 @@ export default function HomeScreen({ navigation }: Props) {
         </Pressable>
       </View>
 
-      {/* Admin entry */}
-      <View style={[styles.card, styles.section]}>
-        <View style={[styles.accentBar, { backgroundColor: colors.subtle }]} />
-        <Text style={styles.cardHeading}>Admin Console</Text>
-        <Text style={[styles.cardTextMuted, styles.mt4]}>Manage issuers, keys, holders & credentials.</Text>
+      {/* Admin entry - only show if userType is 'admin' */}
+      {userType === "admin" && (
+        <View style={[styles.card, styles.section]}>
+          <View style={[styles.accentBar, { backgroundColor: colors.subtle }]} />
+          <Text style={styles.cardHeading}>Admin Console</Text>
+          <Text style={[styles.cardTextMuted, styles.mt4]}>Manage issuers, keys, holders & credentials.</Text>
+          <Pressable
+            onPress={() => navigation.navigate("Admin")}
+            hitSlop={8}
+            android_ripple={{ color: "rgba(255,255,255,0.10)" }}
+            style={({ pressed }) => [
+              styles.button,
+              styles.buttonPrimary,
+              pressed && styles.pressed,
+              styles.mt14,
+            ]}
+          >
+            <Text style={styles.buttonText}>Open Admin →</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Logout Button */}
+      <View style={[styles.card, styles.section, {backgroundColor: 'transparent', borderColor: 'transparent', elevation: 0}]}>
         <Pressable
-          onPress={() => navigation.navigate("Admin")}
+          onPress={handleLogout}
           hitSlop={8}
           android_ripple={{ color: "rgba(255,255,255,0.10)" }}
           style={({ pressed }) => [
             styles.button,
-            styles.buttonPrimary,
+            styles.buttonOutline,
             pressed && styles.pressed,
-            styles.mt14,
+            {borderColor: colors.error, backgroundColor: 'rgba(255,59,48,0.15)'}
           ]}
         >
-          <Text style={styles.buttonText}>Open Admin →</Text>
+          <Text style={[styles.buttonOutlineText, {color: colors.error}]}>Sign Out</Text>
         </Pressable>
       </View>
 
