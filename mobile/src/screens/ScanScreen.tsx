@@ -12,8 +12,7 @@ import {
 import { CameraView, useCameraPermissions, BarcodeScanningResult } from "expo-camera";
 import { useSync } from "../hooks/useSync";
 import { verifyJwsOffline } from "../verify/jws";
-import { enqueueUpload } from "../storage/storage";
-import { postCredential } from "../api/endpoints";
+import { queueScan, queueCredential } from "../storage/storage"; // Remove enqueueUpload and postCredential imports
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 
@@ -34,7 +33,7 @@ export default function ScanScreen({ navigation }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const [asking, setAsking] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const { trust, revokedSet, online } = useSync();
+  const { trust, revokedSet, updateQueueSizes } = useSync(); // Remove 'online' dependency, add updateQueueSizes
   const [lastResult, setLastResult] = useState<any>(null);
   
   const scaleAnim = useSharedValue(0);
@@ -67,24 +66,43 @@ export default function ScanScreen({ navigation }: Props) {
         
         scaleAnim.value = withTiming(1, { duration: 300 });
 
+        // OFFLINE-FIRST APPROACH - Always queue locally, sync will upload when online
+        const scanTime = new Date().toISOString();
+
+        // Queue scan event locally (always offline)
+        await queueScan({
+          jti: verification.payload.jti || "unknown",
+          verified: verification.ok,
+          scanned_at: scanTime,
+        });
+
+        // Queue credential locally if verification succeeded (always offline)
         if (verification.ok) {
-          try {
-            if (online) {
-              await postCredential({ jws: token });
-            } else {
-              await enqueueUpload(token);
-            }
-          } catch {
-            await enqueueUpload(token);
-          }
+          await queueCredential({
+            jws: token,
+            scanned_at: scanTime,
+          });
         }
+
+        // Update queue sizes in sync screen
+        if (updateQueueSizes) {
+          await updateQueueSizes();
+        }
+
+        // Show result to user
+        if (verification.ok) {
+          Alert.alert("✅ Valid", "Credential verified successfully!\n(Queued for sync)");
+        } else {
+          Alert.alert("❌ Invalid", `Verification failed: ${verification.reason}`);
+        }
+
       } catch (e: any) {
         Alert.alert("Scan error", e?.message || "Invalid QR");
       } finally {
         setTimeout(() => setScanned(false), 800);
       }
     },
-    [scanned, trust, revokedSet, online, scaleAnim]
+    [scanned, trust, revokedSet, updateQueueSizes, scaleAnim] // Remove 'online' dependency
   );
   
   const animatedStyle = useAnimatedStyle(() => {

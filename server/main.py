@@ -19,7 +19,7 @@ from sqlalchemy import (
     Boolean, ForeignKey, Integer, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, selectinload  # Add selectinload here
 from sqlalchemy.future import select
 
 import jwt
@@ -91,6 +91,7 @@ class IssuerKey(Base):
     alg = Column(String)
     public_key_pem = Column(Text)
     is_active = Column(Boolean, default=True)
+    revoked = Column(Boolean, default=False)  # New field to track revocation
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     issuer = relationship("Issuer", back_populates="keys")
@@ -162,14 +163,6 @@ class IssuerKeyIn(BaseModel):
     public_key_pem: str
     is_active: bool = True
 
-class CredentialIn(BaseModel):
-    jws: str = Field(..., description="Compact JWS/JWT form of the credential")
-
-    holder_subject: Optional[str] = None
-    issuer_did: Optional[str] = None
-    jti: Optional[str] = None
-    format: Optional[VCFormat] = None
-
 class CredentialOut(BaseModel):
     id: str
     jti: str
@@ -204,6 +197,13 @@ class ScanOut(BaseModel):
     verified: bool
     scanned_at: datetime
     # Optional: could add location, device_id, etc.
+
+# Add batch upload schemas
+class ScanBatch(BaseModel):
+    scans: List[Dict[str, Any]]
+
+class CredentialBatch(BaseModel):
+    credentials: List[Dict[str, Any]]
 
 # -----------------------
 # App / DI helpers
@@ -245,10 +245,40 @@ def sha256(s: str) -> str:
 def _parse_jws_unverified(token: str) -> Dict[str, Any]:
     """Parse JWT/JWS header & payload WITHOUT verifying signature."""
     try:
-        header = jwt.get_unverified_header(token)
-        payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False})
+        # Decode payload without verification
+        payload = jwt.decode(
+            token, 
+            options={
+                "verify_signature": False, 
+                "verify_aud": False, 
+                "verify_exp": False,
+                "verify_iat": False,
+                "verify_nbf": False
+            }
+        )
+        
+        # Extract header manually (works with all PyJWT versions)
+        import base64
+        import json
+        
+        # Split the JWT and get the header part
+        parts = token.split('.')
+        if len(parts) != 3:
+            raise ValueError("Invalid JWT format")
+            
+        header_b64 = parts[0]
+        # Add padding if needed
+        header_b64 += '=' * (4 - len(header_b64) % 4)
+        
+        # Decode the header
+        header_bytes = base64.urlsafe_b64decode(header_b64)
+        header = json.loads(header_bytes.decode('utf-8'))
+        
         return {"header": header, "payload": payload}
+        
     except Exception as e:
+        print(f"❌ JWT parse error: {e}")
+        print(f"❌ Token preview: {token[:50]}..." if len(token) > 50 else f"❌ Token: {token}")
         raise HTTPException(status_code=400, detail=f"Invalid JWS: {e}")
 
 # -----------------------
@@ -297,123 +327,33 @@ def add_issuer_key(body: IssuerKeyIn, db: Session = Depends(get_db), current_use
 
 # Trust bundle (for offline verifiers to prefetch)
 @app.get("/trust-bundle", response_model=TrustBundleOut)
-def trust_bundle(db: Session = Depends(get_db)):
-    active_keys = db.query(IssuerKey).join(Issuer, IssuerKey.issuer_id_fk == Issuer.id).filter(IssuerKey.is_active == True).all()
-    items = []
-    for k in active_keys:
-        items.append({
-            "issuerId": k.issuer.issuer_id,
-            "kid": k.kid,
-            "alg": k.alg,
-            "publicKeyPem": k.public_key_pem,
+def get_trust_bundle(db: Session = Depends(get_db)):
+    # Query issuer_keys directly with a join to get issuer information
+    active_keys = db.query(IssuerKey, Issuer).join(
+        Issuer, IssuerKey.issuer_id_fk == Issuer.id
+    ).filter(
+        IssuerKey.is_active == True,
+        IssuerKey.revoked == False
+    ).all()
+    
+    # Build the trust bundle items
+    trust_bundle_items = []
+    for key, issuer in active_keys:
+        trust_bundle_items.append({
+            "issuerId": issuer.issuer_id,
+            "kid": key.kid,
+            "alg": key.alg,
+            "publicKeyPem": key.public_key_pem,
         })
-    version = len(items)
-    print(TrustBundleOut(version=version, issuedAt=now_utc(), issuers=items))
-    return TrustBundleOut(version=version, issuedAt=now_utc(), issuers=items)
-
-# Credentials
-@app.post("/credentials", response_model=CredentialOut)
-def store_credential(body: CredentialIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if not body.jws:
-        raise HTTPException(400, detail="Provide 'jws' for JWT format")
-
-    fmt: VCFormat = body.format or VCFormat.jws
-    raw_str = body.jws.strip()
-    meta = _parse_jws_unverified(raw_str)
-    payload = meta["payload"]
     
-    issuer_did: Optional[str] = body.issuer_did or payload.get("iss")
-    holder_subject: Optional[str] = body.holder_subject or payload.get("sub")
-    jti: Optional[str] = body.jti or payload.get("jti") or str(uuid.uuid4())
+    print(f"Found {len(trust_bundle_items)} active keys")
+    for item in trust_bundle_items:
+        print(f"  - Issuer: {item['issuerId']}, Kid: {item['kid']}")
     
-    iat = payload.get("iat"); nbf = payload.get("nbf"); exp = payload.get("exp")
-    vc = payload.get("vc") or {}
-    t = vc.get("type") if isinstance(vc, dict) else None
-    if isinstance(t, list): types = t
-    elif isinstance(t, str): types = [t]
-    else: types = None
-
-    def to_dt(x):
-        if x is None: return None
-        if isinstance(x, (int, float)):
-            return datetime.fromtimestamp(int(x), tz=timezone.utc)
-        return None
-
-    issued_at = to_dt(iat); not_before = to_dt(nbf); expires_at = to_dt(exp)
-    raw_enc = enc(raw_str); fingerprint = sha256(raw_str)
-
-    # Check if a credential with this JTI already exists
-    stmt = select(Credential).where(Credential.jti == jti)
-    existing_cred = db.execute(stmt).scalars().first()
-
-    if not existing_cred:
-        cred = Credential(
-            id=str(uuid.uuid4()),
-            jti=jti,
-            format=fmt,
-            issuer_did=issuer_did,
-            holder_subject=holder_subject,
-            types=types,
-            issued_at=issued_at,
-            not_before=not_before,
-            expires_at=expires_at,
-            raw_encrypted=raw_enc,
-            raw_sha256=fingerprint,
-            status=CredentialStatus.ACTIVE,
-        )
-        db.add(cred)
-        return_cred = cred
-    else:
-        return_cred = existing_cred
-
-    # Log a scan event, linking it to the credential
-    scan_event = Scan(jti=jti, verified=True) # Assume for this endpoint it's verified
-    db.add(scan_event)
-
-    try:
-        db.commit()
-    except Exception as e:
-        print("Error: ", e)
-        db.rollback()
-        raise HTTPException(400, detail=f"Could not store credential: {e}")
-    db.refresh(return_cred)
-
-    return CredentialOut(
-        id=return_cred.id,
-        jti=return_cred.jti,
-        format=return_cred.format,
-        issuer_did=return_cred.issuer_did,
-        holder_subject=return_cred.holder_subject,
-        types=return_cred.types,
-        issued_at=return_cred.issued_at,
-        not_before=return_cred.not_before,
-        expires_at=return_cred.expires_at,
-        status=return_cred.status,
-        revoked_at=return_cred.revoked_at,
-        revoke_reason=return_cred.revoke_reason,
-        created_at=return_cred.created_at,
-    )
-
-@app.get("/credentials/{jti}", response_model=CredentialOut)
-def get_credential(jti: str, db: Session = Depends(get_db)):
-    stmt = select(Credential).where(Credential.jti == jti)
-    cred = db.execute(stmt).scalars().first()
-    if not cred:
-        raise HTTPException(404, detail="Credential not found")
-    return CredentialOut(
-        id=cred.id,
-        jti=cred.jti,
-        format=cred.format,
-        issuer_did=cred.issuer_did,
-        holder_subject=cred.holder_subject,
-        types=cred.types,
-        issued_at=cred.issued_at,
-        not_before=cred.not_before,
-        expires_at=cred.expires_at,
-        status=cred.status,
-        revoked_at=cred.revoked_at,
-        revoke_reason=cred.revoke_reason,
-        created_at=cred.created_at,
+    return TrustBundleOut(
+        version=len(trust_bundle_items),
+        issuedAt=now_utc(),
+        issuers=trust_bundle_items
     )
 
 @app.post("/credentials/{jti}/revoke")
@@ -445,22 +385,113 @@ def revocations(db: Session = Depends(get_db)):
     version = len(out)
     return RevocationListOut(version=version, issuedAt=now_utc(), revokedJti=out)
 
-@app.get("/scans", response_model=List[ScanOut])
-def get_scans(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    stmt = select(Scan).order_by(Scan.scanned_at.desc())
-    scans = db.execute(stmt).scalars().all()
-    return [ScanOut(id=s.id, jti=s.jti, verified=s.verified, scanned_at=s.scanned_at) for s in scans]
+# Add a new endpoint to revoke issuer keys
+@app.post("/issuers/keys/{kid}/revoke")
+def revoke_issuer_key(
+    kid: str, 
+    reason: Optional[str] = None, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)  # Add authentication
+):
+    key = db.query(IssuerKey).filter(IssuerKey.kid == kid).first()
+    if not key:
+        raise HTTPException(status_code=404, detail="Issuer key not found")
 
-# Minimal search/list helpers
-@app.get("/holders/{subject}/credentials", response_model=List[CredentialOut])
-def list_holder_creds(subject: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    creds = db.query(Credential).filter_by(holder_subject=subject).order_by(Credential.created_at.desc()).all()
-    return [
-        CredentialOut(
-            id=c.id, jti=c.jti, format=c.format, issuer_did=c.issuer_did,
-            holder_subject=c.holder_subject, types=c.types,
-            issued_at=c.issued_at, not_before=c.not_before, expires_at=c.expires_at,
-            status=c.status, revoked_at=c.revoked_at, revoke_reason=c.revoke_reason,
-            created_at=c.created_at
-        ) for c in creds
-    ]
+    if key.revoked:
+        return {"message": "Issuer key is already revoked", "kid": kid, "already": True}
+
+    key.revoked = True
+    db.commit()
+    return {"message": "Issuer key revoked successfully", "kid": kid, "reason": reason}
+
+@app.get("/issuers/keys/revoked")
+def get_revoked_issuer_keys(db: Session = Depends(get_db)):
+    """Get a list of all revoked issuer key IDs (kids)"""
+    revoked_keys = db.query(IssuerKey.kid).filter(IssuerKey.revoked == True).all()
+    revoked_kids = [key[0] for key in revoked_keys]  # Extract the kid values
+    
+    return {
+        "revokedKids": revoked_kids,
+        "count": len(revoked_kids)
+    }
+
+# Batch upload scans
+@app.post("/scans/batch")
+def upload_scan_batch(
+    body: ScanBatch, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Upload a batch of scan events from offline queue"""
+    uploaded = 0
+    for scan_data in body.scans:
+        try:
+            scan_event = Scan(
+                jti=scan_data.get("jti", "unknown"),
+                verified=scan_data.get("verified", False)
+            )
+            # Parse scanned_at if provided
+            if "scanned_at" in scan_data:
+                scan_event.scanned_at = datetime.fromisoformat(scan_data["scanned_at"].replace('Z', '+00:00'))
+            
+            db.add(scan_event)
+            uploaded += 1
+        except Exception as e:
+            print(f"Failed to upload scan: {e}")
+    
+    try:
+        db.commit()
+        return {"uploaded": uploaded, "total": len(body.scans)}
+    except Exception as e:
+        db.rollback()
+        print(e)
+        raise HTTPException(400, detail=f"Batch upload failed: {e}")
+
+# Batch upload credentials
+@app.post("/credentials/batch")
+def upload_credential_batch(
+    body: CredentialBatch, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Upload a batch of credentials from offline queue"""
+    uploaded = 0
+    for cred_data in body.credentials:
+        try:
+            jws = cred_data.get("jws", "")
+            if not jws:
+                continue
+                
+            # Parse and store credential (reuse existing logic)
+            meta = _parse_jws_unverified(jws)
+            payload = meta["payload"]
+            
+            jti = payload.get("jti") or str(uuid.uuid4())
+            
+            # Check if already exists
+            existing = db.query(Credential).filter_by(jti=jti).first()
+            if existing:
+                continue  # Skip duplicates
+                
+            # Create credential (simplified version)
+            cred = Credential(
+                id=str(uuid.uuid4()),
+                jti=jti,
+                format=VCFormat.jws,
+                issuer_did=payload.get("iss"),
+                holder_subject=payload.get("sub"),
+                raw_encrypted=enc(jws),
+                raw_sha256=sha256(jws),
+                status=CredentialStatus.ACTIVE,
+            )
+            db.add(cred)
+            uploaded += 1
+            
+        except Exception as e:
+            print(f"Failed to upload credential: {e}")
+    
+    try:
+        db.commit()
+        return {"uploaded": uploaded, "total": len(body.credentials)}
+    except Exception as e:
+        db.rollback()

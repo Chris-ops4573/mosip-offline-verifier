@@ -70,10 +70,17 @@ export function verifyJwsOffline(token: string, tb: TrustBundle, revoked: Set<st
     if (!keyItem) {
       return { ok: false, reason: "Issuer key not found in trust bundle", header, payload };
     }
-    // Revocation check
+
+    // Revocation check for credentials
     const jti = payload.jti;
     if (jti && revoked.has(jti)) {
       return { ok: false, reason: "Credential is revoked", header, payload };
+    }
+
+    // Revocation check for issuer keys
+    const kid = header.kid;
+    if (kid && revoked.has(kid)) {
+      return { ok: false, reason: "Issuer key is revoked", header, payload };
     }
 
     // Verify signature (RS256 or ES256)

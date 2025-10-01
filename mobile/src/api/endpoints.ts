@@ -22,17 +22,20 @@ export const fetchTrustBundle = (): Promise<TrustBundle> =>
 export const fetchRevocations = (): Promise<RevocationList> =>
   api.get("/revocations").then((r) => r.data);
 
-/* ─────────── Credentials & Scans ─────────── */
+/* ─────────── Batch Uploads (for offline sync) ─────────── */
 
-export const postCredential = (body: {
-  jws: string;
-  holder_subject?: string;
-  issuer_did?: string;
-  jti?: string;
-}): Promise<CredentialOut> => api.post("/credentials", body).then((r) => r.data);
+export const uploadScanBatch = (scans: any[]): Promise<{ uploaded: number; total: number }> =>
+  api.post("/scans/batch", { scans }).then((r) => r.data);
 
-export const getCredential = (jti: string): Promise<CredentialOut> =>
-  api.get(`/credentials/${encodeURIComponent(jti)}`).then((r) => r.data);
+export const uploadCredentialBatch = (credentials: any[]): Promise<{ uploaded: number; total: number }> =>
+  api.post("/credentials/batch", { credentials }).then((r) => r.data);
+
+/* ─────────── Scans ─────────── */
+
+export const fetchScanHistory = (): Promise<ScanOut[]> => 
+  api.get("/scans").then((r) => r.data);
+
+/* ─────────── Credentials (Admin only) ─────────── */
 
 export const revokeCredential = (
   jti: string,
@@ -40,18 +43,12 @@ export const revokeCredential = (
 ): Promise<{ ok: boolean; already?: boolean }> =>
   api.post(`/credentials/${encodeURIComponent(jti)}/revoke`, { reason }).then((r) => r.data);
 
-export const fetchScanHistory = (): Promise<ScanOut[]> => 
-  api.get("/scans").then((r) => r.data);
-
 /* ─────────── Holders ─────────── */
 
 export const createHolder = (body: {
   subject: string;
   display_name?: string;
 }): Promise<HolderOut> => api.post("/holders", body).then((r) => r.data);
-
-export const listHolderCredentials = (subject: string): Promise<CredentialOut[]> =>
-  api.get(`/holders/${encodeURIComponent(subject)}/credentials`).then((r) => r.data);
 
 /* ─────────── Issuers & Keys ─────────── */
 
@@ -68,3 +65,16 @@ export const addIssuerKey = (body: {
   is_active?: boolean;
 }): Promise<AddIssuerKeyResponse> =>
   api.post("/issuers/keys", body).then((r) => r.data);
+
+/* ─────────── Issuer Key Revocations ─────────── */
+
+// Fetch revoked issuer keys
+export const fetchRevokedIssuerKeys = (): Promise<{ revokedKids: string[] }> =>
+  api.get("/issuers/keys/revoked").then((r) => r.data);
+
+// Revoke an issuer key
+export const revokeIssuerKey = (
+  kid: string,
+  reason?: string
+): Promise<{ ok: boolean; already?: boolean }> =>
+  api.post(`/issuers/keys/${encodeURIComponent(kid)}/revoke`, { reason }).then((r) => r.data);

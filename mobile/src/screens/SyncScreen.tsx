@@ -23,7 +23,7 @@ const colors = {
 };
 
 export default function SyncScreen() {
-  const { online, busy, err, trust, revo, syncNow } = useSync();
+  const { online, busy, err, trust, revo, revokedKeys, syncNow, queueSizes } = useSync(); // Include revokedKeys and queueSizes from useSync
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -56,8 +56,19 @@ export default function SyncScreen() {
           <Text style={styles.value}>{trust?.version ?? "-"}</Text>
         </View>
         <View style={styles.row}>
-          <Text style={styles.label}>Revocations</Text>
+          <Text style={styles.label}>Credential revocations</Text>
           <Text style={styles.value}>{revo?.version ?? "-"}</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>Issuer key revocations</Text>
+          <Text style={styles.value}>{revokedKeys ? revokedKeys.size : "-"}</Text>
+        </View>
+        {/* Add queue information display */}
+        <View style={styles.row}>
+          <Text style={styles.label}>Pending uploads</Text>
+          <Text style={styles.value}>
+            {queueSizes.scans} scans, {queueSizes.credentials} credentials
+          </Text>
         </View>
 
         {err ? (

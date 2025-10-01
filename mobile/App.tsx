@@ -3,6 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { ActivityIndicator, StyleSheet, View, Text } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { setLogoutCallback } from "./src/api/client"; // Add this import
 
 // Screens
 import HomeScreen from "./src/screens/HomeScreen";
@@ -70,6 +71,11 @@ function App() {
         setIsLoggedIn(false);
         setUserType(null);
     };
+
+    // Register the logout callback with the API client
+    useEffect(() => {
+        setLogoutCallback(handleLogout);
+    }, []);
 
     if (isLoggedIn === null) {
         // Show loading screen while checking AsyncStorage

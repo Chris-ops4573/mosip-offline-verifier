@@ -1,5 +1,6 @@
 # auth.py
 import os
+import logging  # Import logging module
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -18,13 +19,17 @@ from database import get_db, engine, Base
 # -----------------------
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 600  # 10 hours (instead of 30 minutes)
 
 # Password hashing - Updated to use Argon2
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # -----------------------
 # User Model
@@ -79,17 +84,23 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        logger.info("Decoding token...")
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        logger.info(f"Token payload: {payload}")
         username: str = payload.get("sub")
         if username is None:
+            logger.error("Token payload missing 'sub' field.")
             raise credentials_exception
         token_data = TokenData(username=username)
-    except JWTError:
+    except JWTError as e:
+        logger.error(f"JWT decoding error: {e}")
         raise credentials_exception
     
     user = db.query(User).filter(User.username == token_data.username).first()
     if user is None:
+        logger.error(f"User not found for username: {token_data.username}")
         raise credentials_exception
+    logger.info(f"Authenticated user: {user.username}")
     return user
 
 # -----------------------
@@ -104,6 +115,7 @@ router = APIRouter(
 def register_user(body: UserIn, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.username == body.username).first()
     if existing_user:
+        logger.warning(f"Attempt to register already existing username: {body.username}")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Username already registered"
@@ -116,13 +128,14 @@ def register_user(body: UserIn, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
+    logger.info(f"User registered successfully: {new_user.username}")
     return {"message": "User registered successfully"}
 
 @router.post("/token", response_model=Token)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        logger.warning(f"Failed login attempt for username: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -133,8 +146,10 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
     access_token = create_access_token(
         data={"sub": user.username, "user_type": user.user_type}, expires_delta=access_token_expires
     )
+    logger.info(f"Access token created for user: {user.username}")
     return {"access_token": access_token}
 
 @router.get("/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
+    logger.info(f"Fetching details for user: {current_user.username}")
     return {"username": current_user.username, "created_at": current_user.created_at}

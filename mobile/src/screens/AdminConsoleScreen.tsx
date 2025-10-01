@@ -17,9 +17,10 @@ import {
   addIssuer,
   addIssuerKey,
   createHolder,
-  postCredential,
   revokeCredential,
+  revokeIssuerKey,
 } from "../api/endpoints";
+import { api } from "../api/client";
 
 const colors = {
   bg: "#0b0d12",
@@ -48,7 +49,7 @@ export default function AdminConsoleScreen({ navigation }: Props) {
           <Text style={styles.badgeText}>Admin • Manage data</Text>
         </View>
         <Text style={styles.title}>Admin Console</Text>
-        <Text style={styles.subtitle}>Create issuers, keys, holders, credentials, and revoke by JTI.</Text>
+        <Text style={styles.subtitle}>Create issuers, keys, holders, and manage revocations.</Text> {/* Update subtitle */}
 
         {/* Back to Home */}
         <Pressable
@@ -64,8 +65,8 @@ export default function AdminConsoleScreen({ navigation }: Props) {
       <AddIssuerCard />
       <AddIssuerKeyCard />
       <AddHolderCard />
-      <StoreCredentialCard />
       <RevokeCard />
+      <RevokeIssuerKeyCard />
     </ScrollView>
   );
 }
@@ -257,90 +258,6 @@ function AddHolderCard() {
   );
 }
 
-function StoreCredentialCard() {
-  const [raw, setRaw] = useState(""); // JWS or JSON-LD string
-  const [holderSubject, setHolderSubject] = useState("");
-  const [issuerDid, setIssuerDid] = useState("");
-  const [jti, setJti] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  async function onSubmit() {
-    if (!raw.trim()) return Alert.alert("Missing", "Paste a compact JWS.");
-    const body: any = {};
-    body.jws = raw.trim();
-
-    if (holderSubject.trim()) body.holder_subject = holderSubject.trim();
-    if (issuerDid.trim()) body.issuer_did = issuerDid.trim();
-    if (jti.trim()) body.jti = jti.trim();
-
-    setBusy(true); setMsg(null);
-    try {
-      const res = await postCredential(body);
-      setMsg(`OK • Stored credential jti: ${res.jti}`);
-      setRaw(""); setHolderSubject(""); setIssuerDid(""); setJti("");
-    } catch (e: any) {
-      Alert.alert("Failed", e?.message || "Could not store credential.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <View style={styles.card}>
-      <View style={[styles.accentBar, { backgroundColor: colors.accent }]} />
-      <Text style={styles.cardHeading}>Store Credential</Text>
-      <Text style={[styles.cardTextMuted, styles.mt4]}>Accepts compact JWS.</Text>
-
-      <Text style={styles.label}>credential (JWS)</Text>
-      <TextInput
-        value={raw}
-        onChangeText={setRaw}
-        placeholder={'eyJhbGciOiJSUzI1NiIsImtpZCI6I...'}
-        placeholderTextColor="rgba(242,244,247,0.45)"
-        autoCapitalize="none"
-        autoCorrect={false}
-        multiline
-        style={[styles.input, { minHeight: 120, textAlignVertical: "top" }]}
-    />
-
-
-      <Text style={[styles.label, styles.mt12]}>holder_subject (override, optional)</Text>
-      <TextInput
-        value={holderSubject}
-        onChangeText={setHolderSubject}
-        placeholder="did:example:acme-exports"
-        placeholderTextColor="rgba(242,244,247,0.45)"
-        autoCapitalize="none"
-        style={styles.input}
-      />
-
-      <Text style={[styles.label, styles.mt12]}>issuer_did (override, optional)</Text>
-      <TextInput
-        value={issuerDid}
-        onChangeText={setIssuerDid}
-        placeholder="did:example:ministry-trade"
-        placeholderTextColor="rgba(242,244,247,0.45)"
-        autoCapitalize="none"
-        style={styles.input}
-      />
-
-      <Text style={[styles.label, styles.mt12]}>jti (override, optional)</Text>
-      <TextInput
-        value={jti}
-        onChangeText={setJti}
-        placeholder="cred-123"
-        placeholderTextColor="rgba(242,244,247,0.45)"
-        autoCapitalize="none"
-        style={styles.input}
-      />
-
-      <PrimaryButton title={busy ? "Storing…" : "Store credential →"} onPress={onSubmit} disabled={busy || !raw.trim()} busy={busy} />
-      {msg && <SuccessPill text={msg} />}
-    </View>
-  );
-}
-
 function RevokeCard() {
   const [jti, setJti] = useState("");
   const [reason, setReason] = useState("");
@@ -386,6 +303,71 @@ function RevokeCard() {
       />
 
       <DangerButton title={busy ? "Revoking…" : "Revoke →"} onPress={onSubmit} disabled={busy || !jti.trim()} busy={busy} />
+      {msg && <SuccessPill text={msg} />}
+    </View>
+  );
+}
+
+function RevokeIssuerKeyCard() {
+  const [kid, setKid] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function onSubmit() {
+    if (!kid.trim()) {
+      setMsg("Please enter a key ID");
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const result = await revokeIssuerKey(kid, reason || undefined);
+      if (result.already) {
+        setMsg("⚠️ Key was already revoked");
+      } else {
+        setMsg("✅ Issuer key revoked successfully");
+      }
+      setKid(""); setReason("");
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || "Unknown error";
+      setMsg(`❌ Error: ${detail}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={styles.card}>
+      <View style={[styles.accentBar, { backgroundColor: colors.danger }]} />
+      <Text style={styles.cardHeading}>Revoke Issuer Key</Text>
+      <Text style={[styles.cardTextMuted, styles.mt4]}>
+        Marks issuer key status as REVOKED by Key ID (kid).
+      </Text>
+
+      <Text style={styles.label}>kid</Text>
+      <TextInput
+        value={kid}
+        onChangeText={setKid}
+        placeholder="Key ID (kid)"
+        placeholderTextColor="rgba(242,244,247,0.45)"
+        autoCapitalize="none"
+        style={styles.input}
+      />
+      <Text style={[styles.label, styles.mt12]}>reason (optional)</Text>
+      <TextInput
+        value={reason}
+        onChangeText={setReason}
+        placeholder="Expired / revoked by authority / etc."
+        placeholderTextColor="rgba(242,244,247,0.45)"
+        style={styles.input}
+      />
+
+      <DangerButton
+        title={busy ? "Revoking…" : "Revoke →"}
+        onPress={onSubmit}
+        disabled={busy || !kid.trim()}
+        busy={busy}
+      />
       {msg && <SuccessPill text={msg} />}
     </View>
   );
