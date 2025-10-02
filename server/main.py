@@ -327,7 +327,7 @@ def add_issuer_key(body: IssuerKeyIn, db: Session = Depends(get_db), current_use
 
 # Trust bundle (for offline verifiers to prefetch)
 @app.get("/trust-bundle", response_model=TrustBundleOut)
-def get_trust_bundle(db: Session = Depends(get_db)):
+def get_trust_bundle(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Query issuer_keys directly with a join to get issuer information
     active_keys = db.query(IssuerKey, Issuer).join(
         Issuer, IssuerKey.issuer_id_fk == Issuer.id
@@ -356,6 +356,14 @@ def get_trust_bundle(db: Session = Depends(get_db)):
         issuers=trust_bundle_items
     )
 
+# Revocation list for offline verifiers
+@app.get("/revocations", response_model=RevocationListOut)
+def revocations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    revoked_entries = db.query(RevokedCredential.jti).all()
+    out = [r[0] for r in revoked_entries]
+    version = len(out)
+    return RevocationListOut(version=version, issuedAt=now_utc(), revokedJti=out)
+
 @app.post("/credentials/{jti}/revoke")
 def revoke_credential(jti: str, body: RevokeIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     cred = db.query(Credential).filter_by(jti=jti).first()
@@ -377,14 +385,6 @@ def revoke_credential(jti: str, body: RevokeIn, db: Session = Depends(get_db), c
     db.commit()
     return {"ok": True}
 
-# Revocation list for offline verifiers
-@app.get("/revocations", response_model=RevocationListOut)
-def revocations(db: Session = Depends(get_db)):
-    revoked_entries = db.query(RevokedCredential.jti).all()
-    out = [r[0] for r in revoked_entries]
-    version = len(out)
-    return RevocationListOut(version=version, issuedAt=now_utc(), revokedJti=out)
-
 # Add a new endpoint to revoke issuer keys
 @app.post("/issuers/keys/{kid}/revoke")
 def revoke_issuer_key(
@@ -405,7 +405,7 @@ def revoke_issuer_key(
     return {"message": "Issuer key revoked successfully", "kid": kid, "reason": reason}
 
 @app.get("/issuers/keys/revoked")
-def get_revoked_issuer_keys(db: Session = Depends(get_db)):
+def get_revoked_issuer_keys(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get a list of all revoked issuer key IDs (kids)"""
     revoked_keys = db.query(IssuerKey.kid).filter(IssuerKey.revoked == True).all()
     revoked_kids = [key[0] for key in revoked_keys]  # Extract the kid values
@@ -495,3 +495,4 @@ def upload_credential_batch(
         return {"uploaded": uploaded, "total": len(body.credentials)}
     except Exception as e:
         db.rollback()
+        raise HTTPException(400, detail=f"Batch upload failed: {e}")

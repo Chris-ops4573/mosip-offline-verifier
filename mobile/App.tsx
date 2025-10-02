@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { ActivityIndicator, StyleSheet, View, Text } from "react-native";
+import { ActivityIndicator, StyleSheet, View, Text, Alert } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setLogoutCallback } from "./src/api/client"; // Add this import
 
@@ -66,10 +66,20 @@ function App() {
         }
     };
 
-    const handleLogout = async () => {
+    // Updated logout handler to accept optional message
+    const handleLogout = async (message?: string) => {
         await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
         setIsLoggedIn(false);
         setUserType(null);
+        
+        // Show message if provided
+        if (message) {
+            Alert.alert(
+                "Session Expired",
+                message,
+                [{ text: "OK", style: "default" }]
+            );
+        }
     };
 
     // Register the logout callback with the API client

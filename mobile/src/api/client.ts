@@ -9,11 +9,11 @@ export const api = axios.create({
   timeout: 15000,
 });
 
-// Store the logout callback function
-let logoutCallback: (() => void) | null = null;
+// Store the logout callback function - now supports optional message
+let logoutCallback: ((message?: string) => void) | null = null;
 
 // Function to set the logout callback from App.tsx
-export const setLogoutCallback = (callback: () => void) => {
+export const setLogoutCallback = (callback: (message?: string) => void) => {
   logoutCallback = callback;
 };
 
@@ -36,9 +36,9 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       console.log("🔓 Authentication failed - triggering logout");
 
-      // Call the logout callback if it exists
+      // Call the logout callback with session expired message
       if (logoutCallback) {
-        logoutCallback();
+        logoutCallback("Your session has expired. Please login again.");
       }
     }
 
