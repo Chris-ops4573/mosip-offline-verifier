@@ -26,8 +26,7 @@ cd mosip-offline-verifier
 
 2. **Configure `.env` file:**
 ```
-Backend env:
-# Database
+#Backend env:
 POSTGRES_USER=username
 POSTGRES_PASSWORD=password
 POSTGRES_DB=vcdb
@@ -42,8 +41,7 @@ DB_POOL_SIZE=10
 DB_MAX_OVERFLOW=20
 DB_POOL_RECYCLE=1800
 
-Frontend env:
-# Backend API Configuration
+#Frontend env:
 API_BASE_URL=your-ngrok-link-for-port-8000
 
 # Expo Configuration (optional)
@@ -59,14 +57,10 @@ docker-compose up --build -d
 4. **Setup ngrok for mobile access:**
 ```bash
 # Install ngrok if not already installed
-# Visit https://ngrok.com/ and sign up for free account
-
 # Expose local backend to internet
 ngrok http 8000
-
 # Copy the https URL (e.g., https://abc123.ngrok-free.app)
-# Update mobile/.env with this URL:
-# API_BASE_URL=https://abc123.ngrok-free.app
+# Update mobile/.env with this URL: API_BASE_URL=https://abc123.ngrok-free.app
 ```
 
 ### Frontend (React Native)
