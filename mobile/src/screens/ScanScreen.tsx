@@ -7,12 +7,11 @@ import {
   Pressable,
   ActivityIndicator,
   Platform,
-  Alert,
 } from "react-native";
 import { CameraView, useCameraPermissions, BarcodeScanningResult } from "expo-camera";
 import { useSync } from "../hooks/useSync";
 import { verifyJwsOffline } from "../verify/jws";
-import { queueScan, queueCredential } from "../storage/storage"; // Remove enqueueUpload and postCredential imports
+import { queueScan, queueCredential } from "../storage/storage";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 
@@ -33,8 +32,9 @@ export default function ScanScreen({ navigation }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const [asking, setAsking] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const { trust, revokedSet, updateQueueSizes } = useSync(); // Remove 'online' dependency, add updateQueueSizes
+  const { trust, revokedSet, updateQueueSizes } = useSync();
   const [lastResult, setLastResult] = useState<any>(null);
+  const [showNoTrustMessage, setShowNoTrustMessage] = useState(false);
   
   const scaleAnim = useSharedValue(0);
 
@@ -55,8 +55,11 @@ export default function ScanScreen({ navigation }: Props) {
 
       try {
         if (!trust) {
-          Alert.alert("No trust bundle", "Please sync issuer keys first.");
+          // Instead of Alert, show a message in the UI
+          setShowNoTrustMessage(true);
           setScanned(false);
+          // Hide the message after 3 seconds
+          setTimeout(() => setShowNoTrustMessage(false), 3000);
           return;
         }
 
@@ -64,6 +67,7 @@ export default function ScanScreen({ navigation }: Props) {
         const verification = verifyJwsOffline(token, trust, revokedSet);
         setLastResult({ result: verification, token });
         
+        // Trigger the smooth animation
         scaleAnim.value = withTiming(1, { duration: 300 });
 
         // OFFLINE-FIRST APPROACH - Always queue locally, sync will upload when online
@@ -89,20 +93,23 @@ export default function ScanScreen({ navigation }: Props) {
           await updateQueueSizes();
         }
 
-        // Show result to user
-        if (verification.ok) {
-          Alert.alert("✅ Valid", "Credential verified successfully!\n(Queued for sync)");
-        } else {
-          Alert.alert("❌ Invalid", `Verification failed: ${verification.reason}`);
-        }
+        // No more Alert popups - the animated result card will show the status
 
       } catch (e: any) {
-        Alert.alert("Scan error", e?.message || "Invalid QR");
+        // Instead of Alert, set an error result for smooth display
+        setLastResult({ 
+          result: { 
+            ok: false, 
+            reason: e?.message || "Invalid QR code" 
+          }, 
+          token: result?.data || "" 
+        });
+        scaleAnim.value = withTiming(1, { duration: 300 });
       } finally {
         setTimeout(() => setScanned(false), 800);
       }
     },
-    [scanned, trust, revokedSet, updateQueueSizes, scaleAnim] // Remove 'online' dependency
+    [scanned, trust, revokedSet, updateQueueSizes, scaleAnim]
   );
   
   const animatedStyle = useAnimatedStyle(() => {
@@ -146,6 +153,15 @@ export default function ScanScreen({ navigation }: Props) {
 
   return (
     <View style={styles.screen}>
+      {showNoTrustMessage && (
+        <View style={styles.messageOverlay}>
+          <Animated.View style={[styles.messageCard, animatedStyle]}>
+            <Text style={styles.messageText}>⚠️ No trust bundle</Text>
+            <Text style={styles.messageSubtext}>Please sync issuer keys first</Text>
+          </Animated.View>
+        </View>
+      )}
+      
       <View style={styles.cameraWrap}>
         <CameraView
           style={StyleSheet.absoluteFill}
@@ -403,4 +419,38 @@ const styles = StyleSheet.create({
   mb12: { marginBottom: 12 },
   mt8: { marginTop: 8 },
   mt14: { marginTop: 14 },
+
+  // Message overlay styles
+  messageOverlay: {
+    position: 'absolute',
+    top: 100,
+    left: 20,
+    right: 20,
+    zIndex: 1000,
+    alignItems: 'center',
+  },
+  messageCard: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.accent,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  messageText: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  messageSubtext: {
+    color: colors.muted,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 4,
+  },
 });

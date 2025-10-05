@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, selectinload  # Add selectinload here
 from sqlalchemy.future import select
 
-import jwt
+from jose import jwt 
 from cryptography.fernet import Fernet
 import uuid
 from dotenv import load_dotenv
@@ -135,7 +135,7 @@ class RevokedCredential(Base):
 class Scan(Base):
     __tablename__ = "scans"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    jti = Column(String, ForeignKey("credentials.jti", ondelete="CASCADE"), nullable=False)
+    jti = Column(String, nullable=False)
     verified = Column(Boolean, nullable=False)
     scanned_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -283,41 +283,38 @@ def sha256(s: str) -> str:
 def _parse_jws_unverified(token: str) -> Dict[str, Any]:
     """Parse JWT/JWS header & payload WITHOUT verifying signature."""
     try:
-        # Decode payload without verification
-        payload = jwt.decode(
-            token, 
-            options={
-                "verify_signature": False, 
-                "verify_aud": False, 
-                "verify_exp": False,
-                "verify_iat": False,
-                "verify_nbf": False
-            }
-        )
-        
-        # Extract header manually (works with all PyJWT versions)
         import base64
         import json
         
-        # Split the JWT and get the header part
+        # Split the token into parts
         parts = token.split('.')
         if len(parts) != 3:
-            raise ValueError("Invalid JWT format")
-            
+            raise ValueError("Invalid JWT format - expected 3 parts")
+        
+        # Decode header
         header_b64 = parts[0]
         # Add padding if needed
-        header_b64 += '=' * (4 - len(header_b64) % 4)
-        
-        # Decode the header
+        missing_padding = len(header_b64) % 4
+        if missing_padding:
+            header_b64 += '=' * (4 - missing_padding)
         header_bytes = base64.urlsafe_b64decode(header_b64)
         header = json.loads(header_bytes.decode('utf-8'))
+        
+        # Decode payload
+        payload_b64 = parts[1]
+        # Add padding if needed
+        missing_padding = len(payload_b64) % 4
+        if missing_padding:
+            payload_b64 += '=' * (4 - missing_padding)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        payload = json.loads(payload_bytes.decode('utf-8'))
         
         return {"header": header, "payload": payload}
         
     except Exception as e:
         print(f"❌ JWT parse error: {e}")
         print(f"❌ Token preview: {token[:50]}..." if len(token) > 50 else f"❌ Token: {token}")
-        raise HTTPException(status_code=400, detail=f"Invalid JWS: {e}")
+        raise ValueError(f"Invalid JWS: {e}")
 
 # -----------------------
 # Routes
