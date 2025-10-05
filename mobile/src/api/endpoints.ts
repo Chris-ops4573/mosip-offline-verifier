@@ -10,10 +10,6 @@ import type {
   ScanOut
 } from "../types";
 
-/* ─────────── Health ─────────── */
-
-export const getHealth = () => api.get("/health").then((r) => r.data);
-
 /* ─────────── Trust & Revocations ─────────── */
 
 export const fetchTrustBundle = (): Promise<TrustBundle> =>

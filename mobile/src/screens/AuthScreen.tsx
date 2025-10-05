@@ -42,12 +42,12 @@ export default function AuthScreen({ navigation, route }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [signupUserType, setSignupUserType] = useState<"admin" | "user">("user");
 
   // The 'onAuthSuccess' function is passed from App.tsx via the route params
   const { onAuthSuccess } = route.params as { onAuthSuccess: () => void };
 
   const handleLogin = async () => {
+    // Allow admin login - no blocking here
     setLoading(true);
     try {
       const formData = new URLSearchParams();
@@ -79,13 +79,22 @@ export default function AuthScreen({ navigation, route }: Props) {
   };
 
   const handleSignup = async () => {
+    // Block admin username during signup only
+    if (username.toLowerCase() === "admin") {
+      Alert.alert(
+        "Username Not Available", 
+        "The username 'admin' is reserved and cannot be used for new registrations."
+      );
+      return;
+    }
+
     setLoading(true);
     try {
-      // Send user_type in signup
+      // Always create new accounts as regular users
       const response = await api.post('/auth/register', {
         username: username,
         password: password,
-        user_type: signupUserType,
+        user_type: "user", // Force user type to be "user" for new signups
       });
 
       Alert.alert("Success", response.data.message || "Registration complete. Please log in.");
@@ -127,7 +136,7 @@ export default function AuthScreen({ navigation, route }: Props) {
       <View style={styles.header}>
         <Text style={styles.title}>{formTitle}</Text>
         <Text style={styles.subtitle}>
-          {isLogin ? "Access the Admin Console and protected features." : "Create your new verification account."}
+          {isLogin ? "Access your verification account or admin console." : "Create your new verification account."}
         </Text>
       </View>
 
@@ -137,7 +146,7 @@ export default function AuthScreen({ navigation, route }: Props) {
         <Text style={styles.label}>Username</Text>
         <TextInput
           style={styles.input}
-          placeholder="e.g., admin_user"
+          placeholder={isLogin ? "e.g., admin or user123" : "e.g., verifier_user"}
           placeholderTextColor={colors.muted}
           value={username}
           onChangeText={setUsername}
@@ -154,52 +163,6 @@ export default function AuthScreen({ navigation, route }: Props) {
           onChangeText={setPassword}
           secureTextEntry
         />
-
-        {/* Show user type toggle only in signup mode */}
-        {!isLogin && (
-          <View style={{ marginTop: 18, marginBottom: 8 }}>
-            <Text style={styles.label}>Sign up as:</Text>
-            <View style={{ flexDirection: "row", marginTop: 8 }}>
-              <Pressable
-                onPress={() => setSignupUserType("user")}
-                style={[
-                  styles.userTypeButton,
-                  signupUserType === "user" && styles.userTypeButtonSelected,
-                ]}
-                hitSlop={8}
-                disabled={loading}
-              >
-                <Text
-                  style={[
-                    styles.userTypeButtonText,
-                    signupUserType === "user" && styles.userTypeButtonTextSelected,
-                  ]}
-                >
-                  Verifier
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSignupUserType("admin")}
-                style={[
-                  styles.userTypeButton,
-                  signupUserType === "admin" && styles.userTypeButtonSelected,
-                  { marginLeft: 16 },
-                ]}
-                hitSlop={8}
-                disabled={loading}
-              >
-                <Text
-                  style={[
-                    styles.userTypeButtonText,
-                    signupUserType === "admin" && styles.userTypeButtonTextSelected,
-                  ]}
-                >
-                  Admin
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
 
         <Pressable
           onPress={handleSubmit}
@@ -355,24 +318,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
   },
-  userTypeButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 18,
+  testingNotice: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: colors.subtle,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.subtle,
   },
-  userTypeButtonSelected: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  userTypeButtonText: {
-    color: colors.text,
-    fontWeight: "600",
-    fontSize: 15,
-  },
-  userTypeButtonTextSelected: {
-    color: "#fff",
+  testingNoticeText: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
   },
 });

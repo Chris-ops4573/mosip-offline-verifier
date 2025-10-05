@@ -148,8 +148,3 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
     )
     logger.info(f"Access token created for user: {user.username}")
     return {"access_token": access_token}
-
-@router.get("/me")
-def read_users_me(current_user: User = Depends(get_current_user)):
-    logger.info(f"Fetching details for user: {current_user.username}")
-    return {"username": current_user.username, "created_at": current_user.created_at}

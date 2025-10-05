@@ -67,10 +67,31 @@ export type AddIssuerKeyResponse = {
 export type VerifyResult =
   | { ok: true; payload: any; header: any; jti?: string; warnings?: string[] }
   | { ok: false; reason: string; header?: any; payload?: any };
+export type RevocationListOut = {
+  version: number;
+  issuedAt: string;
+  revokedJti: string[];
+};
 
+/* ─────────── Scans ─────────── */
 export type ScanOut = {
   id: string;
   jti: string;
   verified: boolean;
   scanned_at: string;
-}
+};
+
+/* ─────────── Batch Operations ─────────── */
+export type ScanBatch = {
+  scans: Array<{
+    jti: string;
+    verified: boolean;
+    scanned_at?: string;
+  }>;
+};
+
+export type CredentialBatch = {
+  credentials: Array<{
+    jws: string;
+  }>;
+};

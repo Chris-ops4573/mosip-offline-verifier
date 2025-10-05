@@ -9,6 +9,7 @@ import hashlib
 import enum
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Dict
+from contextlib import asynccontextmanager  # Add this import
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +29,7 @@ import uuid
 from dotenv import load_dotenv
 
 from database import Base, engine, get_db 
-from auth import router as auth_router, get_current_user, User 
+from auth import router as auth_router, get_current_user, User, get_password_hash
 
 load_dotenv()
 
@@ -87,16 +88,17 @@ class IssuerKey(Base):
     __tablename__ = "issuer_keys"
     id = Column(String, primary_key=True)
     issuer_id_fk = Column(String, ForeignKey("issuers.id", ondelete="CASCADE"))
-    kid = Column(String, index=True)
+    kid = Column(String, unique=True, index=True)  # Changed: Now globally unique
     alg = Column(String)
     public_key_pem = Column(Text)
     is_active = Column(Boolean, default=True)
-    revoked = Column(Boolean, default=False)  # New field to track revocation
+    revoked = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     issuer = relationship("Issuer", back_populates="keys")
 
-    __table_args__ = (UniqueConstraint("issuer_id_fk", "kid", name="uq_issuer_kid"),)
+    # Remove the composite constraint since kid is now globally unique
+    # __table_args__ = (UniqueConstraint("issuer_id_fk", "kid", name="uq_issuer_kid"),)
 
 class CredentialStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
@@ -208,7 +210,43 @@ class CredentialBatch(BaseModel):
 # -----------------------
 # App / DI helpers
 # -----------------------
-app = FastAPI(title="VC Storage Backend (Postgres)", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Create default admin user
+    db = SessionLocal()
+    try:
+        # Check if admin user already exists
+        admin_user = db.query(User).filter(User.username == "admin").first()
+        if not admin_user:
+            # Get admin password from environment or use default
+            admin_password = os.getenv("ADMIN_PASSWORD")
+            hashed_password = get_password_hash(admin_password)
+            
+            admin_user = User(
+                username="admin",
+                hashed_password=hashed_password,
+                user_type="admin"
+            )
+            db.add(admin_user)
+            db.commit()
+            print("✅ Default admin user created: admin")
+        else:
+            print("ℹ️ Admin user already exists")
+    except Exception as e:
+        print(f"❌ Failed to create admin user: {e}")
+    finally:
+        db.close()
+    
+    yield
+    
+    # Shutdown: cleanup if needed
+    print("Application shutting down...")
+
+app = FastAPI(
+    title="VC Storage Backend (Postgres)", 
+    version="0.2.0",
+    lifespan=lifespan  # Add this line
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -284,10 +322,6 @@ def _parse_jws_unverified(token: str) -> Dict[str, Any]:
 # -----------------------
 # Routes
 # -----------------------
-@app.get("/health")
-def health():
-    return {"ok": True, "time": now_utc().isoformat()}
-
 # Holders
 @app.post("/holders", response_model=HolderOut)
 def create_holder(body: HolderIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -318,11 +352,28 @@ def add_issuer_key(body: IssuerKeyIn, db: Session = Depends(get_db), current_use
     iss = db.query(Issuer).filter_by(issuer_id=body.issuer_id).first()
     if not iss:
         raise HTTPException(404, detail="Issuer not found")
+    
+    # Check if kid already exists globally
+    existing_key = db.query(IssuerKey).filter_by(kid=body.kid).first()
+    if existing_key:
+        # Get the issuer info for better error message
+        existing_issuer = db.query(Issuer).filter_by(id=existing_key.issuer_id_fk).first()
+        raise HTTPException(
+            409, 
+            detail=f"Key ID '{body.kid}' already exists for issuer '{existing_issuer.issuer_id}'. Key IDs must be globally unique."
+        )
+    
     k = IssuerKey(
-        id=str(uuid.uuid4()), issuer_id_fk=iss.id,
-        kid=body.kid, alg=body.alg, public_key_pem=body.public_key_pem, is_active=body.is_active
+        id=str(uuid.uuid4()), 
+        issuer_id_fk=iss.id,
+        kid=body.kid, 
+        alg=body.alg, 
+        public_key_pem=body.public_key_pem, 
+        is_active=body.is_active
     )
-    db.add(k); db.commit(); db.refresh(k)
+    db.add(k)
+    db.commit()
+    db.refresh(k)
     return {"ok": True, "id": k.id}
 
 # Trust bundle (for offline verifiers to prefetch)
